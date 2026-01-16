@@ -4,7 +4,9 @@ from scipy.sparse.linalg import spsolve
 
 class TFTPoissonSolver:
     def __init__(self, length=2.0, 
-                 t_buffer=0.2, eps_buffer=6.0,
+                 # 修改：将 Buffer 拆分为 SiN 和 SiO
+                 t_buf_sin=0.1, eps_buf_sin=7.0,
+                 t_buf_sio=0.1, eps_buf_sio=3.9,
                  t_igzo=0.05, eps_igzo=10.0, nd_igzo=1e16,
                  t_gi=0.1, eps_gi=3.9,
                  structure_type='Double Gate',
@@ -17,35 +19,47 @@ class TFTPoissonSolver:
         self.N_off = nd_igzo  
         
         self.L_cm = length * 1e-4
-        self.t_buffer_cm = t_buffer * 1e-4
+        
+        # 几何尺寸转换 (um -> cm)
+        self.t_sin_cm = t_buf_sin * 1e-4
+        self.t_buf_sio_cm = t_buf_sio * 1e-4
         self.t_igzo_cm = t_igzo * 1e-4
         self.t_gi_cm = t_gi * 1e-4
         
-        self.eps_buf = eps_buffer
+        # 介电常数
+        self.eps_sin = eps_buf_sin
+        self.eps_buf_sio = eps_buf_sio
         self.eps_igzo = eps_igzo
         self.eps_gi = eps_gi
         
         self.structure_type = structure_type
         self.nx = int(nx)
-        self.user_ny = int(ny) # 保存用户想要的高精度
+        self.user_ny = int(ny) 
         
         self._init_mesh_final()
 
     def _init_mesh_final(self):
-        y_if1 = self.t_buffer_cm
-        y_if2 = self.t_buffer_cm + self.t_igzo_cm
-        y_top = y_if2 + self.t_gi_cm
+        # 定义各层界面的 Y 坐标 (从底向上: 0 -> SiN -> BufSiO -> IGZO -> GI)
+        y_if1 = self.t_sin_cm                      # SiN / SiO Interface
+        y_if2 = y_if1 + self.t_buf_sio_cm          # SiO / IGZO Interface
+        y_if3 = y_if2 + self.t_igzo_cm             # IGZO / GI Interface
+        y_top = y_if3 + self.t_gi_cm               # Top
         
         # 1. IGZO Mesh: 严格使用用户定义的高精度
         n_igzo = self.user_ny
-        y_igzo = np.linspace(y_if1, y_if2, n_igzo)
+        y_igzo_mesh = np.linspace(y_if2, y_if3, n_igzo)
         
-        # 2. Dielectrics: 适当的点数即可
-        n_dielec = 60
-        y_buf = np.linspace(0, y_if1, n_dielec)
-        y_gi = np.linspace(y_if2, y_top, n_dielec)
+        # 2. Dielectrics Mesh: 适当的点数
+        n_sin = 30
+        n_buf_sio = 30
+        n_gi = 40
         
-        y_all = np.concatenate([y_buf, y_igzo, y_gi])
+        y_sin_mesh = np.linspace(0, y_if1, n_sin)
+        y_buf_sio_mesh = np.linspace(y_if1, y_if2, n_buf_sio)
+        y_gi_mesh = np.linspace(y_if3, y_top, n_gi)
+        
+        # 合并网格并去重
+        y_all = np.concatenate([y_sin_mesh, y_buf_sio_mesh, y_igzo_mesh, y_gi_mesh])
         self.y = np.unique(y_all)
         self.ny = len(self.y)
         
@@ -54,16 +68,23 @@ class TFTPoissonSolver:
         
         self.X, self.Y = np.meshgrid(self.x, self.y)
         
-        # Masks
-        tol = 1e-12
-        self.mask_buffer = (self.Y < y_if1 - tol)
-        self.mask_igzo   = (self.Y >= y_if1 - tol) & (self.Y <= y_if2 + tol)
-        self.mask_gi     = (self.Y > y_if2 + tol)
+        # Masks (定义物理区域)
+        tol = 1e-13
+        # SiN 层: < y_if1
+        self.mask_sin = (self.Y < y_if1 - tol)
+        # Buffer SiO 层: y_if1 <= y < y_if2
+        self.mask_buf_sio = (self.Y >= y_if1 - tol) & (self.Y < y_if2 - tol)
+        # IGZO 层: y_if2 <= y <= y_if3
+        self.mask_igzo = (self.Y >= y_if2 - tol) & (self.Y <= y_if3 + tol)
+        # GI 层: > y_if3
+        self.mask_gi = (self.Y > y_if3 + tol)
         
+        # 构建介电常数图
         self.epsilon_map = np.zeros_like(self.X)
-        self.epsilon_map[self.mask_buffer] = self.eps_buf
-        self.epsilon_map[self.mask_igzo]   = self.eps_igzo
-        self.epsilon_map[self.mask_gi]     = self.eps_gi
+        self.epsilon_map[self.mask_sin] = self.eps_sin
+        self.epsilon_map[self.mask_buf_sio] = self.eps_buf_sio
+        self.epsilon_map[self.mask_igzo] = self.eps_igzo
+        self.epsilon_map[self.mask_gi] = self.eps_gi
 
     def calculate_n_from_phi(self, phi_val, v_ch_val):
         u = (phi_val - v_ch_val) / self.Vt
@@ -78,6 +99,7 @@ class TFTPoissonSolver:
         v_ch = np.zeros((self.ny, self.nx))
         for i in range(self.nx): v_ch[:, i] = v_ds * (i/(self.nx-1))
             
+        # 简单的线性初值猜测
         phi = np.zeros((self.ny, self.nx))
         for i in range(self.ny):
             r = self.y[i]/self.y[-1]
@@ -87,6 +109,7 @@ class TFTPoissonSolver:
         cx = 1.0/(self.dx**2)
         eps_flat = self.epsilon_map.flatten() * self.eps0
         
+        # 牛顿迭代 / 泊松求解
         for it in range(30):
             n_conc = self.calculate_n_from_phi(phi, v_ch)
             u = (phi - v_ch)/self.Vt
@@ -108,8 +131,11 @@ class TFTPoissonSolver:
                 for ix in range(self.nx):
                     k = iy*self.nx + ix
                     is_bc=False; val=0.0
+                    
+                    # 边界条件处理
                     if iy==self.ny-1 and self.structure_type!='Single Gate (Bottom)': is_bc=True; val=v_tg
                     elif iy==0 and self.structure_type!='Single Gate (Top)': is_bc=True; val=v_bg
+                    # 源漏电极仅接触 IGZO 层
                     elif ix==0 and self.mask_igzo[iy,ix]: is_bc=True; val=0.0
                     elif ix==self.nx-1 and self.mask_igzo[iy,ix]: is_bc=True; val=v_ds
                     
@@ -119,6 +145,7 @@ class TFTPoissonSolver:
                     
                     eps = eps_flat[k]; p_c = phi[iy,ix]; d_lap=0.0
                     
+                    # 5点差分算子 (Finite Difference)
                     if ix>0: rows.append(k); cols.append(k-1); data.append(eps*cx); d_lap-=eps*cx
                     if ix<self.nx-1: rows.append(k); cols.append(k+1); data.append(eps*cx); d_lap-=eps*cx
                     if iy>0: rows.append(k); cols.append(k-self.nx); data.append(eps*cy_dn); d_lap-=eps*cy_dn
@@ -130,6 +157,7 @@ class TFTPoissonSolver:
                     res = eps*(p_l-p_c)*cx + eps*(p_r-p_c)*cx + eps*(p_b-p_c)*cy_dn + eps*(p_t-p_c)*cy_up
                     
                     rho=0; drho=0
+                    # 电荷仅存在于 IGZO 区域
                     if self.mask_igzo[iy,ix]:
                         rho = self.q*(self.N_off - n_conc[iy,ix])
                         drho = -self.q*dn_dphi[iy,ix]

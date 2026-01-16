@@ -64,13 +64,6 @@ The non-linear system is solved using a Newton-Raphson iteration loop until conv
 * `solver.py`: The physics engine. Contains the `TFTPoissonSolver` class, mesh generation logic, and the finite difference matrix builder.
 * `requirements.txt`: List of Python dependencies (numpy, scipy, streamlit, plotly).
 
-## 🤝 Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
-## 📄 License
-
-This project is open-source and available under the MIT License.
 
 # OxideTFT-Studio: 高精度 IGZO TFT 物理仿真工具
 
@@ -136,10 +129,3 @@ $$ \nabla \cdot (\epsilon \nabla \phi) = -q (N_{d}^{+} - n) $$
 * `solver.py`: 物理引擎后端。包含 `TFTPoissonSolver` 类、自适应网格生成逻辑以及有限差分矩阵构建算法。
 * `requirements.txt`: 项目所需的 Python 依赖库列表 (numpy, scipy, streamlit, plotly)。
 
-## 🤝 贡献
-
-欢迎提交 Pull Request 或 Issue 来改进这个项目！
-
-## 📄 许可证
-
-本项目开源并基于 MIT 许可证发布。

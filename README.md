@@ -64,10 +64,6 @@ The non-linear system is solved using a Newton-Raphson iteration loop until conv
 * `solver.py`: The physics engine. Contains the `TFTPoissonSolver` class, mesh generation logic, and the finite difference matrix builder.
 * `requirements.txt`: List of Python dependencies (numpy, scipy, streamlit, plotly).
 
-## 📸 Screenshots
-
-*(You can add a screenshot of your running app here)*
-
 ## 🤝 Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
@@ -139,10 +135,6 @@ $$ \nabla \cdot (\epsilon \nabla \phi) = -q (N_{d}^{+} - n) $$
 * `app.py`: Streamlit 前端界面。负责处理用户输入、调用求解器并渲染 Plotly 图表。
 * `solver.py`: 物理引擎后端。包含 `TFTPoissonSolver` 类、自适应网格生成逻辑以及有限差分矩阵构建算法。
 * `requirements.txt`: 项目所需的 Python 依赖库列表 (numpy, scipy, streamlit, plotly)。
-
-## 📸 截图
-
-*(此处可添加程序运行截图)*
 
 ## 🤝 贡献
 

@@ -8,6 +8,10 @@
 
 It uses the **Finite Difference Method (FDM)** to solve the 2D Poisson equation self-consistently with carrier statistics, allowing researchers and engineers to visualize potential distribution, carrier concentration, and electric fields in real-time.
 
+🛠️ Usage
+
+website：https://oxide-tft-simulation-z3wjys5v3czfmapanua62v.streamlit.app
+
 ## 🌟 Key Features
 
 * **Multi-Structure Support:** Simulate various device architectures:
@@ -74,6 +78,10 @@ The non-linear system is solved using a Newton-Raphson iteration loop until conv
 **OxideTFT-Studio** 是一款专为非晶氧化物半导体薄膜晶体管（AOS-TFTs）开发的高精度交互式物理仿真工具，重点针对 IGZO 技术进行了优化。
 
 该项目使用**有限差分法 (FDM)** 对二维泊松方程进行自洽求解，结合载流子统计模型，允许研究人员和工程师实时可视化器件内部的电势分布、载流子浓度以及电场强度。
+
+🛠️ Usage 
+
+传送门：https://oxide-tft-simulation-z3wjys5v3czfmapanua62v.streamlit.app
 
 ## 🌟 核心功能
 

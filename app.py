@@ -29,8 +29,17 @@ with col2:
     eps_buf_sio = st.number_input("Buf SiO 介电常数", value=3.9)
 
 st.sidebar.subheader("Active & GI Layer")
-t_igzo_nm = st.sidebar.number_input("IGZO层厚度 (nm)", value=50.0)
-t_gi_nm = st.sidebar.number_input("GI层 (Top SiO) 厚度 (nm)", value=100.0)
+col3, col4 = st.sidebar.columns(2)
+with col3:
+    t_igzo_nm = st.number_input("IGZO层厚度 (nm)", value=50.0)
+with col4:
+    t_gi_nm = st.number_input("GI层 (Top SiO) 厚度 (nm)", value=100.0)
+    
+col5, col6 = st.sidebar.columns(2)
+with col5:
+    eps_igzo = st.number_input("IGZO 介电常数", value=10.0)
+with col6:
+    eps_gi = st.number_input("GI 介电常数", value=3.9)
 
 st.sidebar.header("3. 网格设置 (Mesh Setting)")
 ny_igzo = st.sidebar.slider("IGZO层 Y轴网格点数 (Max 1000)", 100, 1000, 400)
@@ -48,8 +57,8 @@ if st.sidebar.button("开始仿真 (RUN)", type="primary"):
             # 传入拆分后的 Buffer 参数
             t_buf_sin=t_sin_nm/1000.0, eps_buf_sin=eps_sin,
             t_buf_sio=t_buf_sio_nm/1000.0, eps_buf_sio=eps_buf_sio,
-            t_igzo=t_igzo_nm/1000.0, eps_igzo=10.0, nd_igzo=1e16,
-            t_gi=t_gi_nm/1000.0, eps_gi=3.9,
+            t_igzo=t_igzo_nm/1000.0, eps_igzo=eps_igzo, nd_igzo=1e16,
+            t_gi=t_gi_nm/1000.0, eps_gi=eps_gi,
             structure_type=struct_type,
             nx=nx, 
             ny=ny_igzo 
@@ -133,7 +142,7 @@ if st.sidebar.button("开始仿真 (RUN)", type="primary"):
             E_hd = f_E(y_hd_cm)
             
             fig3 = go.Figure(go.Heatmap(
-                x=x_plot, y=y_plot, z=E_hd, colorscale='Magma', zsmooth='best',
+                x=x_plot, y=y_plot, z=E_hd, colorscale='Hot', zsmooth='best',
                 colorbar=dict(title='Field (V/cm)', tickformat='.1e')
             ))
             st.plotly_chart(fig3, use_container_width=True)

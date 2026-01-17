@@ -3,12 +3,13 @@ from scipy import sparse
 from scipy.sparse.linalg import spsolve
 
 class TFTPoissonSolver:
-    def __init__(self, length=2.0, 
-                 # 修改：将 Buffer 拆分为 SiN 和 SiO
+    def __init__(self, length=2.0, width=10.0,
                  t_buf_sin=0.1, eps_buf_sin=7.0,
                  t_buf_sio=0.1, eps_buf_sio=3.9,
                  t_igzo=0.05, eps_igzo=10.0, nd_igzo=1e16,
                  t_gi=0.1, eps_gi=3.9,
+                 L_source=1.0, Rs_sheet=1e5,
+                 L_drain=1.0, Rd_sheet=1e5,
                  structure_type='Double Gate',
                  nx=50, ny=400): 
         
@@ -19,18 +20,25 @@ class TFTPoissonSolver:
         self.N_off = nd_igzo  
         
         self.L_cm = length * 1e-4
+        self.W_cm = width * 1e-4
         
-        # 几何尺寸转换 (um -> cm)
         self.t_sin_cm = t_buf_sin * 1e-4
         self.t_buf_sio_cm = t_buf_sio * 1e-4
         self.t_igzo_cm = t_igzo * 1e-4
         self.t_gi_cm = t_gi * 1e-4
         
-        # 介电常数
         self.eps_sin = eps_buf_sin
         self.eps_buf_sio = eps_buf_sio
         self.eps_igzo = eps_igzo
         self.eps_gi = eps_gi
+        
+        self.L_source_cm = L_source * 1e-4
+        self.Rs_sheet = Rs_sheet
+        self.L_drain_cm = L_drain * 1e-4
+        self.Rd_sheet = Rd_sheet
+        
+        self.R_source = Rs_sheet * self.L_source_cm / self.W_cm if self.W_cm > 0 else 0
+        self.R_drain = Rd_sheet * self.L_drain_cm / self.W_cm if self.W_cm > 0 else 0
         
         self.structure_type = structure_type
         self.nx = int(nx)
@@ -91,90 +99,125 @@ class TFTPoissonSolver:
         val_log = np.logaddexp(0, u)
         n_val = self.N_off + self.Nc * val_log
         return n_val
+    
+    def calculate_current(self):
+        mu = 10.0
+        tol = 1e-13
+        
+        y_if2 = self.t_sin_cm + self.t_buf_sio_cm
+        y_if3 = y_if2 + self.t_igzo_cm
+        
+        mask_igzo_local = (self.Y >= y_if2 - tol) & (self.Y <= y_if3 + tol)
+        
+        n_igzo = self.n_conc * mask_igzo_local
+        Ex_igzo = self.Ex * mask_igzo_local
+        
+        Jx = self.q * mu * n_igzo * (-Ex_igzo)
+        
+        mid_x = self.nx // 2
+        I_total = np.trapz(Jx[:, mid_x], self.y) * self.W_cm
+        return I_total
 
     def solve(self, v_top_gate_bias, v_ds, v_bot_gate_bias=0.0):
         v_tg = v_top_gate_bias
         v_bg = 0.0 if self.structure_type == 'Source-Gated Bottom' else v_bot_gate_bias
         
-        v_ch = np.zeros((self.ny, self.nx))
-        for i in range(self.nx): v_ch[:, i] = v_ds * (i/(self.nx-1))
-            
-        # 简单的线性初值猜测
-        phi = np.zeros((self.ny, self.nx))
-        for i in range(self.ny):
-            r = self.y[i]/self.y[-1]
-            phi[i, :] = v_bg*(1-r) + v_tg*r
-            
-        N = self.nx * self.ny
-        cx = 1.0/(self.dx**2)
-        eps_flat = self.epsilon_map.flatten() * self.eps0
+        v_d_eff = v_ds
+        I_ds = 0.0
+        max_outer_iter = 10
         
-        # 牛顿迭代 / 泊松求解
-        for it in range(30):
-            n_conc = self.calculate_n_from_phi(phi, v_ch)
-            u = (phi - v_ch)/self.Vt
-            sig_u = 1.0/(1.0 + np.exp(-u))
-            dn_dphi = (self.Nc/self.Vt)*sig_u
-            
-            rows, cols, data, rhs = [], [], [], np.zeros(N)
-            
-            for iy in range(self.ny):
-                if iy > 0: dy_dn = self.y[iy] - self.y[iy-1]
-                else: dy_dn = 1e-9
-                if iy < self.ny-1: dy_up = self.y[iy+1] - self.y[iy]
-                else: dy_up = 1e-9
+        for outer_it in range(max_outer_iter):
+            v_ch = np.zeros((self.ny, self.nx))
+            for i in range(self.nx): 
+                v_ch[:, i] = v_d_eff * (i/(self.nx-1))
                 
-                denom = dy_up + dy_dn
-                cy_up = 2.0/(dy_up*denom)
-                cy_dn = 2.0/(dy_dn*denom)
+            phi = np.zeros((self.ny, self.nx))
+            for i in range(self.ny):
+                r = self.y[i]/self.y[-1]
+                phi[i, :] = v_bg*(1-r) + v_tg*r
                 
-                for ix in range(self.nx):
-                    k = iy*self.nx + ix
-                    is_bc=False; val=0.0
-                    
-                    # 边界条件处理
-                    if iy==self.ny-1 and self.structure_type!='Single Gate (Bottom)': is_bc=True; val=v_tg
-                    elif iy==0 and self.structure_type!='Single Gate (Top)': is_bc=True; val=v_bg
-                    # 源漏电极仅接触 IGZO 层
-                    elif ix==0 and self.mask_igzo[iy,ix]: is_bc=True; val=0.0
-                    elif ix==self.nx-1 and self.mask_igzo[iy,ix]: is_bc=True; val=v_ds
-                    
-                    if is_bc:
-                        rows.append(k); cols.append(k); data.append(1.0); rhs[k]=-(phi[iy,ix]-val)
-                        continue
-                    
-                    eps = eps_flat[k]; p_c = phi[iy,ix]; d_lap=0.0
-                    
-                    # 5点差分算子 (Finite Difference)
-                    if ix>0: rows.append(k); cols.append(k-1); data.append(eps*cx); d_lap-=eps*cx
-                    if ix<self.nx-1: rows.append(k); cols.append(k+1); data.append(eps*cx); d_lap-=eps*cx
-                    if iy>0: rows.append(k); cols.append(k-self.nx); data.append(eps*cy_dn); d_lap-=eps*cy_dn
-                    if iy<self.ny-1: rows.append(k); cols.append(k+self.nx); data.append(eps*cy_up); d_lap-=eps*cy_up
-                    rows.append(k); cols.append(k); data.append(d_lap)
-                    
-                    p_l=phi[iy,ix-1] if ix>0 else p_c; p_r=phi[iy,ix+1] if ix<self.nx-1 else p_c
-                    p_b=phi[iy-1,ix] if iy>0 else p_c; p_t=phi[iy+1,ix] if iy<self.ny-1 else p_c
-                    res = eps*(p_l-p_c)*cx + eps*(p_r-p_c)*cx + eps*(p_b-p_c)*cy_dn + eps*(p_t-p_c)*cy_up
-                    
-                    rho=0; drho=0
-                    # 电荷仅存在于 IGZO 区域
-                    if self.mask_igzo[iy,ix]:
-                        rho = self.q*(self.N_off - n_conc[iy,ix])
-                        drho = -self.q*dn_dphi[iy,ix]
-                        rows.append(k); cols.append(k); data.append(drho)
-                    rhs[k] = -(res + rho)
+            N = self.nx * self.ny
+            cx = 1.0/(self.dx**2)
+            eps_flat = self.epsilon_map.flatten() * self.eps0
             
-            J = sparse.coo_matrix((data,(rows,cols)), shape=(N,N)).tocsr()
-            try: delta = spsolve(J, rhs)
-            except: break
-            phi_flat = phi.flatten() + delta
-            phi = phi_flat.reshape((self.ny,self.nx))
-            if np.max(np.abs(delta)) < 1e-4: break
+            for it in range(30):
+                n_conc = self.calculate_n_from_phi(phi, v_ch)
+                u = (phi - v_ch)/self.Vt
+                sig_u = 1.0/(1.0 + np.exp(-u))
+                dn_dphi = (self.Nc/self.Vt)*sig_u
+                
+                rows, cols, data, rhs = [], [], [], np.zeros(N)
+                
+                for iy in range(self.ny):
+                    if iy > 0: dy_dn = self.y[iy] - self.y[iy-1]
+                    else: dy_dn = 1e-9
+                    if iy < self.ny-1: dy_up = self.y[iy+1] - self.y[iy]
+                    else: dy_up = 1e-9
+                    
+                    denom = dy_up + dy_dn
+                    cy_up = 2.0/(dy_up*denom)
+                    cy_dn = 2.0/(dy_dn*denom)
+                    
+                    for ix in range(self.nx):
+                        k = iy*self.nx + ix
+                        is_bc=False; val=0.0
+                        
+                        if iy==self.ny-1 and self.structure_type!='Single Gate (Bottom)': is_bc=True; val=v_tg
+                        elif iy==0 and self.structure_type!='Single Gate (Top)': is_bc=True; val=v_bg
+                        elif ix==0 and self.mask_igzo[iy,ix]: is_bc=True; val=0.0
+                        elif ix==self.nx-1 and self.mask_igzo[iy,ix]: is_bc=True; val=v_d_eff
+                        
+                        if is_bc:
+                            rows.append(k); cols.append(k); data.append(1.0); rhs[k]=-(phi[iy,ix]-val)
+                            continue
+                        
+                        eps = eps_flat[k]; p_c = phi[iy,ix]; d_lap=0.0
+                        
+                        if ix>0: rows.append(k); cols.append(k-1); data.append(eps*cx); d_lap-=eps*cx
+                        if ix<self.nx-1: rows.append(k); cols.append(k+1); data.append(eps*cx); d_lap-=eps*cx
+                        if iy>0: rows.append(k); cols.append(k-self.nx); data.append(eps*cy_dn); d_lap-=eps*cy_dn
+                        if iy<self.ny-1: rows.append(k); cols.append(k+self.nx); data.append(eps*cy_up); d_lap-=eps*cy_up
+                        rows.append(k); cols.append(k); data.append(d_lap)
+                        
+                        p_l=phi[iy,ix-1] if ix>0 else p_c; p_r=phi[iy,ix+1] if ix<self.nx-1 else p_c
+                        p_b=phi[iy-1,ix] if iy>0 else p_c; p_t=phi[iy+1,ix] if iy<self.ny-1 else p_c
+                        res = eps*(p_l-p_c)*cx + eps*(p_r-p_c)*cx + eps*(p_b-p_c)*cy_dn + eps*(p_t-p_c)*cy_up
+                        
+                        rho=0; drho=0
+                        if self.mask_igzo[iy,ix]:
+                            rho = self.q*(self.N_off - n_conc[iy,ix])
+                            drho = -self.q*dn_dphi[iy,ix]
+                            rows.append(k); cols.append(k); data.append(drho)
+                        rhs[k] = -(res + rho)
+                
+                J = sparse.coo_matrix((data,(rows,cols)), shape=(N,N)).tocsr()
+                try: 
+                    delta = spsolve(J, rhs)
+                    if sparse.issparse(delta):
+                        delta = delta.toarray().flatten()
+                except: 
+                    break
+                phi_flat = phi.flatten() + delta
+                phi = phi_flat.reshape((self.ny,self.nx))
+                if np.max(np.abs(delta)) < 1e-4: break
             
-        self.phi = phi
-        self.n_conc = self.calculate_n_from_phi(phi, v_ch)
-        self._calc_field()
-        return self.phi, self.n_conc, self.E_field
+            self.phi = phi
+            self.n_conc = self.calculate_n_from_phi(phi, v_ch)
+            self._calc_field()
+            
+            I_ds = self.calculate_current()
+            
+            v_drop_source = I_ds * self.R_source
+            v_drop_drain = I_ds * self.R_drain
+            v_d_new = v_ds - v_drop_source - v_drop_drain
+            
+            if abs(v_d_new - v_d_eff) < 1e-4:
+                v_d_eff = v_d_new
+                break
+            
+            v_d_eff = 0.5 * v_d_eff + 0.5 * v_d_new
+        
+        return self.phi, self.n_conc, self.E_field, v_d_eff, I_ds
 
     def _calc_field(self):
         self.Ey, self.Ex = np.gradient(self.phi, self.y, self.x)

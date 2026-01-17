@@ -17,7 +17,11 @@ struct_type = st.sidebar.selectbox(
 )
 
 st.sidebar.header("2. 几何尺寸 (Geometry)")
-L_um = st.sidebar.number_input("沟道长度 L (um)", value=2.0)
+col_lw = st.sidebar.columns(2)
+with col_lw[0]:
+    L_um = st.number_input("沟道长度 L (um)", value=2.0)
+with col_lw[1]:
+    W_um = st.number_input("沟道宽度 W (um)", value=10.0)
 
 st.sidebar.subheader("Buffer Layer (Bottom)")
 col1, col2 = st.sidebar.columns(2)
@@ -41,6 +45,15 @@ with col5:
 with col6:
     eps_gi = st.number_input("GI 介电常数", value=3.9)
 
+st.sidebar.subheader("Source/Drain Resistance")
+col_sd1, col_sd2 = st.sidebar.columns(2)
+with col_sd1:
+    L_source_um = st.number_input("源极长度 (um)", value=1.0, min_value=0.0)
+    Rs_sheet = st.number_input("源极方块电阻 (Ω/sq)", value=1e5, format="%.1e")
+with col_sd2:
+    L_drain_um = st.number_input("漏极长度 (um)", value=1.0, min_value=0.0)
+    Rd_sheet = st.number_input("漏极方块电阻 (Ω/sq)", value=1e5, format="%.1e")
+
 st.sidebar.header("3. 网格设置 (Mesh Setting)")
 ny_igzo = st.sidebar.slider("IGZO层 Y轴网格点数 (Max 1000)", 100, 1000, 400)
 nx = st.sidebar.slider("X轴网格点数 (Max 200)", 20, 200, 50)
@@ -54,21 +67,23 @@ if st.sidebar.button("开始仿真 (RUN)", type="primary"):
     with st.spinner(f"正在计算... (IGZO层物理网格点: {ny_igzo})"):
         solver = TFTPoissonSolver(
             length=L_um,
-            # 传入拆分后的 Buffer 参数
+            width=W_um,
             t_buf_sin=t_sin_nm/1000.0, eps_buf_sin=eps_sin,
             t_buf_sio=t_buf_sio_nm/1000.0, eps_buf_sio=eps_buf_sio,
             t_igzo=t_igzo_nm/1000.0, eps_igzo=eps_igzo, nd_igzo=1e16,
             t_gi=t_gi_nm/1000.0, eps_gi=eps_gi,
+            L_source=L_source_um, Rs_sheet=Rs_sheet,
+            L_drain=L_drain_um, Rd_sheet=Rd_sheet,
             structure_type=struct_type,
             nx=nx, 
             ny=ny_igzo 
         )
         
         start = time.time()
-        phi, n_conc, E = solver.solve(v_top_gate_bias=v_tg, v_ds=v_ds, v_bot_gate_bias=v_bg)
+        phi, n_conc, E, vd_eff, ids = solver.solve(v_top_gate_bias=v_tg, v_ds=v_ds, v_bot_gate_bias=v_bg)
         elapsed = time.time() - start
         
-        st.success(f"计算完成，耗时 {elapsed:.3f}秒")
+        st.success(f"计算完成，耗时 {elapsed:.3f}秒 | 有效Vd = {vd_eff:.4f}V | Ids = {ids:.2e}A")
         
         # --- 物理级重采样渲染 ---
         y_phys_cm = solver.y
@@ -98,7 +113,7 @@ if st.sidebar.button("开始仿真 (RUN)", type="primary"):
         # 4. 重算载流子 (Physics)
         v_ch_hd = np.zeros_like(phi_hd)
         for i in range(len(x_phys_cm)):
-            v_ch_hd[:, i] = v_ds * (i / (len(x_phys_cm)-1))
+            v_ch_hd[:, i] = vd_eff * (i / (len(x_phys_cm)-1))
             
         n_hd = solver.calculate_n_from_phi(phi_hd, v_ch_hd)
         n_log_hd = np.log10(n_hd + 1e-30)

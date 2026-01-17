@@ -8,8 +8,8 @@ class TFTPoissonSolver:
                  t_buf_sio=0.1, eps_buf_sio=3.9,
                  t_igzo=0.05, eps_igzo=10.0, nd_igzo=1e16,
                  t_gi=0.1, eps_gi=3.9,
-                 L_source=1.0, Rs_sheet=1e5,
-                 L_drain=1.0, Rd_sheet=1e5,
+                 L_source=3.0, Rs_sheet=3500,
+                 L_drain=3.0, Rd_sheet=3500,
                  structure_type='Double Gate',
                  nx=50, ny=400): 
         

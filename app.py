@@ -48,11 +48,11 @@ with col6:
 st.sidebar.subheader("Source/Drain Resistance")
 col_sd1, col_sd2 = st.sidebar.columns(2)
 with col_sd1:
-    L_source_um = st.number_input("源极长度 (um)", value=1.0, min_value=0.0)
-    Rs_sheet = st.number_input("源极方块电阻 (Ω/sq)", value=1e5, format="%.1e")
+    L_source_um = st.number_input("源极长度 (um)", value=3.0, min_value=0.0)
+    Rs_sheet = st.number_input("源极方块电阻 (Ω/sq)", value=3500.0)
 with col_sd2:
-    L_drain_um = st.number_input("漏极长度 (um)", value=1.0, min_value=0.0)
-    Rd_sheet = st.number_input("漏极方块电阻 (Ω/sq)", value=1e5, format="%.1e")
+    L_drain_um = st.number_input("漏极长度 (um)", value=3.0, min_value=0.0)
+    Rd_sheet = st.number_input("漏极方块电阻 (Ω/sq)", value=3500.0)
 
 st.sidebar.header("3. 网格设置 (Mesh Setting)")
 ny_igzo = st.sidebar.slider("IGZO层 Y轴网格点数 (Max 1000)", 100, 1000, 400)

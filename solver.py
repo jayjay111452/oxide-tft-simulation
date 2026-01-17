@@ -115,7 +115,7 @@ class TFTPoissonSolver:
         Jx = self.q * mu * n_igzo * (-Ex_igzo)
         
         mid_x = self.nx // 2
-        I_total = np.trapz(Jx[:, mid_x], self.y) * self.W_cm
+        I_total = np.trapezoid(Jx[:, mid_x], self.y) * self.W_cm
         return I_total
 
     def solve(self, v_top_gate_bias, v_ds, v_bot_gate_bias=0.0):

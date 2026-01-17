@@ -88,9 +88,8 @@ if st.sidebar.button("开始仿真 (RUN)", type="primary"):
         y_igzo_subset = y_phys_cm[idx_igzo]
         phi_igzo_subset = phi[idx_igzo, :]
         
-        # 2. 生成高清渲染网格 (800像素)
         target_render_ny = 800
-        y_hd_cm = np.linspace(y_igzo_start, y_igzo_end, target_render_ny)
+        y_hd_cm = np.linspace(y_igzo_subset.min(), y_igzo_subset.max(), target_render_ny)
         
         # 3. 插值电势 (Potential) - 使用 Quadratic 保证平滑
         f_phi = interp1d(y_igzo_subset, phi_igzo_subset, axis=0, kind='quadratic')

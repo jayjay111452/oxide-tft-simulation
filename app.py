@@ -45,6 +45,8 @@ with col5:
 with col6:
     eps_gi = st.number_input("GI 介电常数", value=3.9)
 
+nd_igzo = st.sidebar.number_input("初始载流子浓度 (cm^-3)", value=1e16, format="%.1e", min_value=1e10, max_value=1e20)
+
 st.sidebar.subheader("Source/Drain Resistance")
 col_sd1, col_sd2 = st.sidebar.columns(2)
 with col_sd1:
@@ -70,7 +72,7 @@ if st.sidebar.button("开始仿真 (RUN)", type="primary"):
             width=W_um,
             t_buf_sin=t_sin_nm/1000.0, eps_buf_sin=eps_sin,
             t_buf_sio=t_buf_sio_nm/1000.0, eps_buf_sio=eps_buf_sio,
-            t_igzo=t_igzo_nm/1000.0, eps_igzo=eps_igzo, nd_igzo=1e16,
+            t_igzo=t_igzo_nm/1000.0, eps_igzo=eps_igzo, nd_igzo=nd_igzo,
             t_gi=t_gi_nm/1000.0, eps_gi=eps_gi,
             L_source=L_source_um, Rs_sheet=Rs_sheet,
             L_drain=L_drain_um, Rd_sheet=Rd_sheet,

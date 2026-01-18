@@ -8,6 +8,7 @@ class TFTPoissonSolver:
                  t_buf_sio=0.1, eps_buf_sio=3.9,
                  t_igzo=0.05, eps_igzo=10.0, nd_igzo=1e16,
                  t_gi=0.1, eps_gi=3.9,
+                 dit_top=0.0, dit_bottom=0.0, e_trap=0.3,
                  L_source=3.0, Rs_sheet=3500,
                  L_drain=3.0, Rd_sheet=3500,
                  structure_type='Double Gate',
@@ -18,6 +19,10 @@ class TFTPoissonSolver:
         self.eps0 = 8.854e-14 
         self.Nc = 5.0e18      
         self.N_off = nd_igzo  
+        
+        self.N_it_top = dit_top        
+        self.N_it_bottom = dit_bottom  
+        self.E_trap = e_trap
         
         self.L_cm = length * 1e-4
         self.W_cm = width * 1e-4
@@ -47,17 +52,17 @@ class TFTPoissonSolver:
         self._init_mesh_final()
 
     def _init_mesh_final(self):
-        # 定义各层界面的 Y 坐标 (从底向上: 0 -> SiN -> BufSiO -> IGZO -> GI)
-        y_if1 = self.t_sin_cm                      # SiN / SiO Interface
-        y_if2 = y_if1 + self.t_buf_sio_cm          # SiO / IGZO Interface
-        y_if3 = y_if2 + self.t_igzo_cm             # IGZO / GI Interface
-        y_top = y_if3 + self.t_gi_cm               # Top
+        y_if1 = self.t_sin_cm                      
+        y_if2 = y_if1 + self.t_buf_sio_cm          
+        y_if3 = y_if2 + self.t_igzo_cm             
+        y_top = y_if3 + self.t_gi_cm               
         
-        # 1. IGZO Mesh: 严格使用用户定义的高精度
+        self.y_if2 = y_if2
+        self.y_if3 = y_if3
+        
         n_igzo = self.user_ny
         y_igzo_mesh = np.linspace(y_if2, y_if3, n_igzo)
         
-        # 2. Dielectrics Mesh: 适当的点数
         n_sin = 30
         n_buf_sio = 30
         n_gi = 40
@@ -66,25 +71,22 @@ class TFTPoissonSolver:
         y_buf_sio_mesh = np.linspace(y_if1, y_if2, n_buf_sio)
         y_gi_mesh = np.linspace(y_if3, y_top, n_gi)
         
-        # 合并网格并去重
         y_all = np.concatenate([y_sin_mesh, y_buf_sio_mesh, y_igzo_mesh, y_gi_mesh])
         self.y = np.unique(y_all)
         self.ny = len(self.y)
+        
+        self.idx_if2 = np.argmin(np.abs(self.y - y_if2))
+        self.idx_if3 = np.argmin(np.abs(self.y - y_if3))
         
         self.x = np.linspace(0, self.L_cm, self.nx)
         self.dx = self.x[1] - self.x[0]
         
         self.X, self.Y = np.meshgrid(self.x, self.y)
         
-        # Masks (定义物理区域)
         tol = 1e-13
-        # SiN 层: < y_if1
         self.mask_sin = (self.Y < y_if1 - tol)
-        # Buffer SiO 层: y_if1 <= y < y_if2
         self.mask_buf_sio = (self.Y >= y_if1 - tol) & (self.Y < y_if2 - tol)
-        # IGZO 层: y_if2 <= y <= y_if3
         self.mask_igzo = (self.Y >= y_if2 - tol) & (self.Y <= y_if3 + tol)
-        # GI 层: > y_if3
         self.mask_gi = (self.Y > y_if3 + tol)
         
         # 构建介电常数图
@@ -99,6 +101,16 @@ class TFTPoissonSolver:
         val_log = np.logaddexp(0, u)
         n_val = self.N_off + self.Nc * val_log
         return n_val
+    
+    def calculate_interface_trap_charge(self, phi_surface):
+        E_F_surface = phi_surface
+        u_trap = (E_F_surface - self.E_trap) / self.Vt
+        u_trap = np.clip(u_trap, -50, 50)
+        f_trap = 1.0 / (1.0 + np.exp(-u_trap))
+        f_neutral = 1.0 / (1.0 + np.exp(self.E_trap / self.Vt))
+        
+        delta_Q = -self.q * (f_trap - f_neutral)
+        return delta_Q
     
     def calculate_current(self):
         mu = 10.0
@@ -187,6 +199,25 @@ class TFTPoissonSolver:
                         if self.mask_igzo[iy,ix]:
                             rho = self.q*(self.N_off - n_conc[iy,ix])
                             drho = -self.q*dn_dphi[iy,ix]
+                            
+                            if iy == self.idx_if3 and self.N_it_top > 0:
+                                delta_Q = self.calculate_interface_trap_charge(phi[iy,ix])
+                                Q_it_top = self.N_it_top * delta_Q
+                                rho += Q_it_top / dy_dn
+                                
+                                u_trap = np.clip((phi[iy,ix] - self.E_trap) / self.Vt, -50, 50)
+                                df_dphi = np.exp(-u_trap) / (self.Vt * (1 + np.exp(-u_trap))**2)
+                                drho += self.N_it_top * self.q * df_dphi / dy_dn
+                                
+                            elif iy == self.idx_if2 and self.N_it_bottom > 0:
+                                delta_Q = self.calculate_interface_trap_charge(phi[iy,ix])
+                                Q_it_bottom = self.N_it_bottom * delta_Q
+                                rho += Q_it_bottom / dy_up
+                                
+                                u_trap = np.clip((phi[iy,ix] - self.E_trap) / self.Vt, -50, 50)
+                                df_dphi = np.exp(-u_trap) / (self.Vt * (1 + np.exp(-u_trap))**2)
+                                drho += self.N_it_bottom * self.q * df_dphi / dy_up
+                            
                             rows.append(k); cols.append(k); data.append(drho)
                         rhs[k] = -(res + rho)
                 

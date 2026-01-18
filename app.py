@@ -47,6 +47,15 @@ with col6:
 
 nd_igzo = st.sidebar.number_input("初始载流子浓度 (cm^-3)", value=1e16, format="%.1e", min_value=1e10, max_value=1e20)
 
+st.sidebar.subheader("Interface Trap Density")
+col_dit1, col_dit2 = st.sidebar.columns(2)
+with col_dit1:
+    dit_top = st.number_input("GI/IGZO 界面 (cm^-2)", value=0.0, format="%.1e", min_value=0.0, max_value=1e13)
+with col_dit2:
+    dit_bottom = st.number_input("IGZO/Buffer 界面 (cm^-2)", value=0.0, format="%.1e", min_value=0.0, max_value=1e13)
+
+e_trap = st.sidebar.number_input("界面陷阱能级位置 (eV, 相对费米能级)", value=0.3, min_value=-1.5, max_value=1.5, step=0.1)
+
 st.sidebar.subheader("Source/Drain Resistance")
 col_sd1, col_sd2 = st.sidebar.columns(2)
 with col_sd1:
@@ -74,6 +83,7 @@ if st.sidebar.button("开始仿真 (RUN)", type="primary"):
             t_buf_sio=t_buf_sio_nm/1000.0, eps_buf_sio=eps_buf_sio,
             t_igzo=t_igzo_nm/1000.0, eps_igzo=eps_igzo, nd_igzo=nd_igzo,
             t_gi=t_gi_nm/1000.0, eps_gi=eps_gi,
+            dit_top=dit_top, dit_bottom=dit_bottom, e_trap=e_trap,
             L_source=L_source_um, Rs_sheet=Rs_sheet,
             L_drain=L_drain_um, Rd_sheet=Rd_sheet,
             structure_type=struct_type,
@@ -118,15 +128,22 @@ if st.sidebar.button("开始仿真 (RUN)", type="primary"):
             v_ch_hd[:, i] = vd_eff * (i / (len(x_phys_cm)-1))
             
         n_hd = solver.calculate_n_from_phi(phi_hd, v_ch_hd)
-        n_log_hd = np.log10(n_hd + 1e-30)
+        n_hd = np.clip(n_hd, 1e10, 1e22)
+        n_log_hd = np.log10(n_hd)
         
-        # 5. 绘图数据准备
         x_plot = x_phys_cm * 1e4
-        # 绘图时 Y 轴归零到 IGZO 界面还是保留绝对坐标? 
-        # 这里保留绝对厚度便于观察层结构位置
         y_plot = y_hd_cm * 1e7
         
         z_min, z_max = np.nanmin(n_log_hd), np.nanmax(n_log_hd)
+        
+        if not np.isfinite(z_min):
+            z_min = 10.0
+        if not np.isfinite(z_max):
+            z_max = 22.0
+        
+        z_min = max(z_min, 10.0)
+        z_max = min(z_max, 22.0)
+        
         tick_vals = np.arange(np.floor(z_min), np.ceil(z_max)+0.1, 0.5)
         tick_text = [f"1e{v:.1f}" for v in tick_vals]
 

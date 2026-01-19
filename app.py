@@ -47,14 +47,14 @@ with col6:
 
 nd_igzo = st.sidebar.number_input("初始载流子浓度 (cm^-3)", value=1e16, format="%.1e", min_value=1e10, max_value=1e20)
 
-st.sidebar.subheader("Interface Trap Density")
-col_dit1, col_dit2 = st.sidebar.columns(2)
-with col_dit1:
-    dit_top = st.number_input("GI/IGZO 界面 (cm^-2)", value=0.0, format="%.1e", min_value=0.0, max_value=1e13)
-with col_dit2:
-    dit_bottom = st.number_input("IGZO/Buffer 界面 (cm^-2)", value=0.0, format="%.1e", min_value=0.0, max_value=1e13)
+#st.sidebar.subheader("Interface Trap Density")
+#col_dit1, col_dit2 = st.sidebar.columns(2)
+#with col_dit1:
+#    dit_top = st.number_input("GI/IGZO 界面 (cm^-2)", value=0.0, format="%.1e", min_value=0.0, max_value=1e13)
+#with col_dit2:
+#    dit_bottom = st.number_input("IGZO/Buffer 界面 (cm^-2)", value=0.0, format="%.1e", min_value=0.0, max_value=1e13)
 
-e_trap = st.sidebar.number_input("界面陷阱能级位置 (eV, 相对费米能级)", value=0.3, min_value=-1.5, max_value=1.5, step=0.1)
+#e_trap = st.sidebar.number_input("界面陷阱能级位置 (eV, 相对费米能级)", value=0.3, min_value=-1.5, max_value=1.5, step=0.1)
 
 st.sidebar.subheader("Source/Drain Resistance")
 col_sd1, col_sd2 = st.sidebar.columns(2)

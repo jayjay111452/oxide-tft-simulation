@@ -36,9 +36,10 @@ with col2:
 st.sidebar.subheader("Active & GI Layer")
 col3, col4 = st.sidebar.columns(2)
 with col3:
-    t_igzo_nm = st.number_input("IGZO层厚度 (nm)", value=25.0)
+    t_igzo_nm = st.number_input("IGZO层厚度 (nm)", value=25.0, help="典型值: 15-50 nm | 薄: 15-25 nm | 厚: 40-50 nm")
 with col4:
-    t_gi_nm = st.number_input("GI层 (Top SiO) 厚度 (nm)", value=140.0)
+    t_gi_nm = st.number_input("GI层 (Top SiO) 厚度 (nm)", value=140.0, help="典型值: 100-200 nm | 影响栅极电容和控制能力")
+st.sidebar.caption("💡 IGZO厚度影响沟道电导；GI厚度影响栅控能力")
     
 col5, col6 = st.sidebar.columns(2)
 with col5:
@@ -46,16 +47,23 @@ with col5:
 with col6:
     eps_gi = st.number_input("GI 介电常数", value=3.9)
 
-nd_igzo = st.sidebar.number_input("初始载流子浓度 (cm^-3)", value=1e17, format="%.1e", min_value=1e10, max_value=1e20)
+nd_igzo = st.sidebar.number_input("初始载流子浓度 (cm^-3)", value=1e17, format="%.1e", min_value=1e10, max_value=1e20, 
+                                   help="典型值: 1e15-1e18 | 低掺杂: 1e15-1e16 | 中等: 1e17 | 高掺杂: 1e18+")
+st.sidebar.caption("💡 载流子浓度影响阈值电压和沟道电导")
 
 st.sidebar.subheader("Interface Trap Density")
 col_dit1, col_dit2 = st.sidebar.columns(2)
 with col_dit1:
-    dit_top = st.number_input("GI/IGZO 界面 (cm^-2)", value=3e10, format="%.1e", min_value=0.0, max_value=1e13)
+    dit_top = st.number_input("GI/IGZO 界面 (cm^-2)", value=3e10, format="%.1e", min_value=0.0, max_value=1e13,
+                              help="典型值: 1e10-1e12 | 优质界面: <1e11 | 一般: 1e11-5e11 | 差: >1e12")
 with col_dit2:
-    dit_bottom = st.number_input("IGZO/Buffer 界面 (cm^-2)", value=5e10, format="%.1e", min_value=0.0, max_value=1e13)
+    dit_bottom = st.number_input("IGZO/Buffer 界面 (cm^-2)", value=5e10, format="%.1e", min_value=0.0, max_value=1e13,
+                                  help="典型值: 1e10-1e12 | 优质界面: <1e11 | 一般: 1e11-5e11 | 差: >1e12")
+st.sidebar.caption("💡 界面陷阱会降低等效栅压，影响电子浓度分布")
 
-e_trap = st.sidebar.number_input("界面陷阱能级位置 (eV, 相对费米能级)", value=0.3, min_value=-1.5, max_value=1.5, step=0.1)
+e_trap = st.sidebar.number_input("界面陷阱能级位置 (eV, 相对费米能级)", value=0.3, min_value=-1.5, max_value=1.5, step=0.1,
+                                  help="典型值: 0.2-0.5 eV | 浅能级: <0.3 eV | 深能级: >0.5 eV")
+st.sidebar.caption("💡 能级位置决定陷阱占据率，影响等效栅压降大小")
 
 st.sidebar.subheader("Source/Drain Resistance")
 col_sd1, col_sd2 = st.sidebar.columns(2)

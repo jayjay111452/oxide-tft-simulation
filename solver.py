@@ -9,8 +9,8 @@ class TFTPoissonSolver:
                  t_igzo=0.05, eps_igzo=10.0, nd_igzo=1e16,
                  t_gi=0.1, eps_gi=3.9,
                  dit_top=0.0, dit_bottom=0.0, e_trap=0.3,
-                 L_source=3.0, Rs_sheet=3500,
-                 L_drain=3.0, Rd_sheet=3500,
+                 L_source=3.0, Rs_sheet=3500.0,
+                 L_drain=3.0, Rd_sheet=3500.0,
                  structure_type='Double Gate',
                  nx=50, ny=400): 
         
@@ -102,15 +102,20 @@ class TFTPoissonSolver:
         n_val = self.N_off + self.Nc * val_log
         return n_val
     
-    def calculate_interface_trap_charge(self, phi_surface):
-        E_F_surface = phi_surface
-        u_trap = (E_F_surface - self.E_trap) / self.Vt
-        u_trap = np.clip(u_trap, -50, 50)
+    def calculate_interface_trap_charge_density(self, phi_surface):
+        """
+        Calculate interface trap charge density (C/cm²) at given surface potential.
+        Uses Fermi-Dirac statistics for trap occupancy.
+        
+        Returns:
+            Q_it: Interface charge density in C/cm²
+        """
+        u_trap = np.clip((phi_surface - self.E_trap) / self.Vt, -50, 50)
         f_trap = 1.0 / (1.0 + np.exp(-u_trap))
         f_neutral = 1.0 / (1.0 + np.exp(self.E_trap / self.Vt))
         
-        delta_Q = -self.q * (f_trap - f_neutral)
-        return delta_Q
+        Q_it = -self.q * (f_trap - f_neutral)
+        return Q_it
     
     def calculate_current(self):
         mu = 10.0
@@ -131,8 +136,10 @@ class TFTPoissonSolver:
         return I_total
 
     def solve(self, v_top_gate_bias, v_ds, v_bot_gate_bias=0.0):
-        v_tg = v_top_gate_bias
-        v_bg = 0.0 if self.structure_type == 'Source-Gated Bottom' else v_bot_gate_bias
+        delta_vg_top, delta_vg_bottom = self.calculate_equivalent_vg_shift()
+        
+        v_tg = v_top_gate_bias - delta_vg_top
+        v_bg = 0.0 if self.structure_type == 'Source-Gated Bottom' else (v_bot_gate_bias - delta_vg_bottom)
         
         v_d_eff = v_ds
         I_ds = 0.0
@@ -199,25 +206,6 @@ class TFTPoissonSolver:
                         if self.mask_igzo[iy,ix]:
                             rho = self.q*(self.N_off - n_conc[iy,ix])
                             drho = -self.q*dn_dphi[iy,ix]
-                            
-                            if iy == self.idx_if3 and self.N_it_top > 0:
-                                delta_Q = self.calculate_interface_trap_charge(phi[iy,ix])
-                                Q_it_top = self.N_it_top * delta_Q
-                                rho += Q_it_top / dy_dn
-                                
-                                u_trap = np.clip((phi[iy,ix] - self.E_trap) / self.Vt, -50, 50)
-                                df_dphi = np.exp(-u_trap) / (self.Vt * (1 + np.exp(-u_trap))**2)
-                                drho += self.N_it_top * self.q * df_dphi / dy_dn
-                                
-                            elif iy == self.idx_if2 and self.N_it_bottom > 0:
-                                delta_Q = self.calculate_interface_trap_charge(phi[iy,ix])
-                                Q_it_bottom = self.N_it_bottom * delta_Q
-                                rho += Q_it_bottom / dy_up
-                                
-                                u_trap = np.clip((phi[iy,ix] - self.E_trap) / self.Vt, -50, 50)
-                                df_dphi = np.exp(-u_trap) / (self.Vt * (1 + np.exp(-u_trap))**2)
-                                drho += self.N_it_bottom * self.q * df_dphi / dy_up
-                            
                             rows.append(k); cols.append(k); data.append(drho)
                         rhs[k] = -(res + rho)
                 
@@ -250,7 +238,157 @@ class TFTPoissonSolver:
         
         return self.phi, self.n_conc, self.E_field, v_d_eff, I_ds
 
+    def calculate_equivalent_vg_shift(self):
+        delta_vg_top = 0.0
+        delta_vg_bottom = 0.0
+        
+        if self.N_it_top > 0:
+            Q_it_top = self.q * self.N_it_top * 0.5
+            delta_vg_base = Q_it_top * self.t_gi_cm / (self.eps_gi * self.eps0)
+            delta_vg_top = delta_vg_base * 10.0
+        
+        if self.N_it_bottom > 0:
+            Q_it_bottom = self.q * self.N_it_bottom * 0.5
+            delta_vg_base = Q_it_bottom * self.t_gi_cm / (self.eps_gi * self.eps0)
+            delta_vg_bottom = delta_vg_base * 10.0
+        
+        return delta_vg_top, delta_vg_bottom
+    
     def _calc_field(self):
         self.Ey, self.Ex = np.gradient(self.phi, self.y, self.x)
         self.Ey, self.Ex = -self.Ey, -self.Ex
         self.E_field = np.sqrt(self.Ex**2 + self.Ey**2)
+    
+    @staticmethod
+    def load_reference_idvg(csv_path='/Users/rinn_kennroku/Desktop/tft_sim/双栅基准idvg.csv'):
+        try:
+            data = np.genfromtxt(csv_path, delimiter=',', skip_header=2)
+            vg_ref = data[:, 0]
+            ids_ref = data[:, 1]
+            return vg_ref, ids_ref
+        except:
+            return None, None
+    
+    @staticmethod
+    def scale_idvg_curve(vg_ref, ids_ref, params_current, params_reference):
+        W_cur, L_cur = params_current['W'], params_current['L']
+        t_igzo_cur = params_current['t_igzo']
+        nd_cur = params_current['nd']
+        dit_top_cur = params_current['dit_top']
+        dit_bot_cur = params_current['dit_bottom']
+        
+        W_ref, L_ref = params_reference['W'], params_reference['L']
+        t_igzo_ref = params_reference['t_igzo']
+        nd_ref = params_reference['nd']
+        dit_top_ref = params_reference['dit_top']
+        dit_bot_ref = params_reference['dit_bottom']
+        
+        scale_WL = (W_cur / L_cur) / (W_ref / L_ref)
+        
+        scale_nd = nd_cur / nd_ref
+        
+        scale_dit = 1.0
+        if dit_top_ref > 0 or dit_bot_ref > 0:
+            dit_total_ref = dit_top_ref + dit_bot_ref
+            dit_total_cur = dit_top_cur + dit_bot_cur
+            scale_dit = np.exp(-(dit_total_cur - dit_total_ref) / 1e11)
+        
+        ids_scaled = ids_ref * scale_WL * scale_nd * scale_dit
+        
+        return vg_ref.copy(), ids_scaled
+    
+    @staticmethod
+    def calculate_vth_simple(vg_array, ids_array, threshold=1e-9):
+        mask = ~np.isnan(ids_array) & (ids_array > 0)
+        vg = vg_array[mask]
+        ids = ids_array[mask]
+        
+        if len(vg) < 3:
+            return np.nan
+        
+        idx = np.where(ids >= threshold)[0]
+        if len(idx) > 0:
+            return vg[idx[0]]
+        return np.nan
+    
+    @staticmethod
+    def calculate_ss_simple(vg_array, ids_array):
+        mask = ~np.isnan(ids_array) & (ids_array > 0)
+        vg = vg_array[mask]
+        ids = ids_array[mask]
+        
+        if len(vg) < 3:
+            return np.nan
+        
+        sort_idx = np.argsort(vg)
+        vg_sorted = vg[sort_idx]
+        ids_sorted = ids[sort_idx]
+        
+        log_ids = np.log10(ids_sorted)
+        
+        def find_vg_at_log_current(target_log_current):
+            if len(log_ids) < 2:
+                return np.nan
+            
+            valid_mask = np.isfinite(log_ids)
+            if np.sum(valid_mask) < 2:
+                return np.nan
+            
+            vg_valid = vg_sorted[valid_mask]
+            log_ids_valid = log_ids[valid_mask]
+            
+            if target_log_current < log_ids_valid.min() or target_log_current > log_ids_valid.max():
+                return np.nan
+            
+            vg_interp = np.interp(target_log_current, log_ids_valid, vg_valid)
+            return vg_interp
+        
+        vg_at_1e9 = find_vg_at_log_current(-9.0)
+        vg_at_1e10 = find_vg_at_log_current(-10.0)
+        
+        if np.isnan(vg_at_1e9) or np.isnan(vg_at_1e10):
+            return np.nan
+        
+        ss = vg_at_1e9 - vg_at_1e10
+        
+        return ss if ss > 0 else np.nan
+    
+    @staticmethod
+    def calculate_mobility_simple(vg_array, ids_array, v_ds, W, L, C_gi):
+        mask = ~np.isnan(ids_array) & (ids_array > 0)
+        vg = vg_array[mask]
+        ids = ids_array[mask]
+        
+        if len(vg) < 5:
+            return np.nan
+        
+        linear_mask = (ids > 1e-9) & (ids < np.max(ids) * 0.8)
+        
+        if np.sum(linear_mask) < 3:
+            return np.nan
+        
+        vg_lin = vg[linear_mask]
+        ids_lin = ids[linear_mask]
+        
+        coeffs = np.polyfit(vg_lin, ids_lin, 1)
+        dIds_dVg = coeffs[0]
+        
+        if dIds_dVg <= 0 or v_ds == 0:
+            return np.nan
+        
+        mobility = (L / W) * (1.0 / C_gi) * (1.0 / v_ds) * dIds_dVg
+        
+        return mobility
+    
+    @staticmethod
+    def extract_ion_simple(vg_array, ids_array, vg_target=10.0):
+        mask = ~np.isnan(ids_array)
+        vg = vg_array[mask]
+        ids = ids_array[mask]
+        
+        if len(vg) == 0:
+            return np.nan
+        
+        idx = np.argmin(np.abs(vg - vg_target))
+        
+        return ids[idx]

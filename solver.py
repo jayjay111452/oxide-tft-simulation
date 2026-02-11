@@ -212,8 +212,7 @@ class TFTPoissonSolver:
                 J = sparse.coo_matrix((data,(rows,cols)), shape=(N,N)).tocsr()
                 try: 
                     delta = spsolve(J, rhs)
-                    if sparse.issparse(delta):
-                        delta = delta.toarray().flatten()
+                    delta = np.asarray(delta).flatten()
                 except: 
                     break
                 phi_flat = phi.flatten() + delta
@@ -261,6 +260,7 @@ class TFTPoissonSolver:
     
     @staticmethod
     def load_reference_idvg(csv_path='/Users/rinn_kennroku/Desktop/tft_sim/双栅基准idvg.csv'):
+        """加载参考IdVg曲线数据"""
         try:
             data = np.genfromtxt(csv_path, delimiter=',', skip_header=2)
             vg_ref = data[:, 0]
@@ -270,32 +270,276 @@ class TFTPoissonSolver:
             return None, None
     
     @staticmethod
-    def scale_idvg_curve(vg_ref, ids_ref, params_current, params_reference):
-        W_cur, L_cur = params_current['W'], params_current['L']
-        t_igzo_cur = params_current['t_igzo']
-        nd_cur = params_current['nd']
-        dit_top_cur = params_current['dit_top']
-        dit_bot_cur = params_current['dit_bottom']
+    def extract_reference_params(vg_ref, ids_ref):
+        """
+        从参考曲线中提取关键参数
+        返回: {'vth': 阈值电压, 'ss': 亚阈值摆幅, 'ion': 开态电流, 'mob': 迁移率}
+        """
+        params = {}
         
-        W_ref, L_ref = params_reference['W'], params_reference['L']
-        t_igzo_ref = params_reference['t_igzo']
+        # 提取Vth (使用恒定电流法，1nA)
+        params['vth'] = TFTPoissonSolver.calculate_vth_simple(vg_ref, ids_ref, threshold=1e-9)
+        
+        # 提取SS
+        params['ss'] = TFTPoissonSolver.calculate_ss_simple(vg_ref, ids_ref)
+        
+        # 提取Ion @ Vg=10V
+        params['ion'] = TFTPoissonSolver.extract_ion_simple(vg_ref, ids_ref, vg_target=10.0)
+        
+        # 提取迁移率 (使用线性区近似)
+        mask_valid = (vg_ref > params['vth']) & (vg_ref < params['vth'] + 5) & (ids_ref > 0)
+        if np.sum(mask_valid) >= 2:
+            vg_lin = vg_ref[mask_valid]
+            ids_lin = ids_ref[mask_valid]
+            # 简化的迁移率估计: μ ∝ dIds/dVg
+            dIds_dVg = np.gradient(ids_lin, vg_lin)
+            params['mob'] = np.mean(dIds_dVg[np.isfinite(dIds_dVg)]) * 1e-3  # 粗略估计
+        else:
+            params['mob'] = 10.0  # 默认值
+            
+        return params
+    
+    @staticmethod
+    def calculate_vth_shift(params_current, params_reference):
+        """
+        计算阈值电压偏移量
+        基于物理模型：界面陷阱、厚度、掺杂浓度、buf层等因素
+        """
+        q = 1.602e-19
+        eps0 = 8.854e-14
+        Vt = 0.0259
+        
+        # 参考参数 (双栅基准)
+        t_igzo_ref = params_reference['t_igzo'] * 1e-7
         nd_ref = params_reference['nd']
         dit_top_ref = params_reference['dit_top']
         dit_bot_ref = params_reference['dit_bottom']
+        eps_gi_ref = 3.9
+        t_gi_ref = 140e-7
+        eps_buf_sio_ref = 3.9
+        t_buf_sio_ref = 300e-7
+        eps_sin_ref = 7.0
+        t_sin_ref = 100e-7
+        structure_ref = 'Double Gate'
+        e_trap_ref = 0.3
         
+        # 当前参数
+        t_igzo_cur = params_current['t_igzo'] * 1e-7
+        nd_cur = params_current['nd']
+        dit_top_cur = params_current['dit_top']
+        dit_bot_cur = params_current['dit_bottom']
+        eps_gi_cur = params_current.get('eps_gi', 3.9)
+        t_gi_cur = params_current.get('t_gi', 140) * 1e-7
+        eps_buf_sio_cur = params_current.get('eps_buf_sio', 3.9)
+        t_buf_sio_cur = params_current.get('t_buf_sio', 300) * 1e-7
+        eps_sin_cur = params_current.get('eps_sin', 7.0)
+        t_sin_cur = params_current.get('t_sin', 100) * 1e-7
+        structure_cur = params_current.get('structure_type', 'Double Gate')
+        e_trap_cur = params_current.get('e_trap', 0.3)
+        
+        delta_vth = 0.0
+        
+        # 1. 界面陷阱引起的Vth偏移
+        Cox_gi_ref = eps0 * eps_gi_ref / t_gi_ref
+        Cox_gi_cur = eps0 * eps_gi_cur / t_gi_cur
+        
+        # Buf层电容 (串联)
+        Cox_buf_ref = eps0 * eps_buf_sio_ref / t_buf_sio_ref
+        Cox_sin_ref = eps0 * eps_sin_ref / t_sin_ref
+        Cox_bottom_ref = 1.0 / (1.0/Cox_sin_ref + 1.0/Cox_buf_ref)
+        
+        Cox_buf_cur = eps0 * eps_buf_sio_cur / t_buf_sio_cur
+        Cox_sin_cur = eps0 * eps_sin_cur / t_sin_cur
+        Cox_bottom_cur = 1.0 / (1.0/Cox_sin_cur + 1.0/Cox_buf_cur)
+        
+        dit_total_ref = dit_top_ref + dit_bot_ref
+        dit_total_cur = dit_top_cur + dit_bot_cur
+        
+        # 顶栅界面陷阱影响
+        delta_vth_dit_top = q * (dit_top_cur - dit_top_ref) / Cox_gi_cur
+        delta_vth += delta_vth_dit_top
+        
+        # 底栅界面陷阱影响 (通过buf层)
+        delta_vth_dit_bot = q * (dit_bot_cur - dit_bot_ref) / Cox_bottom_cur
+        delta_vth += delta_vth_dit_bot
+        
+        # 2. Buf膜厚变化对底栅控制的影响
+        # 更厚的buf层 = 更小的Cox = 底栅控制减弱 = 需要更大Vg = Vth增加
+        if t_buf_sio_cur != t_buf_sio_ref or t_sin_cur != t_sin_ref:
+            eff_coupling_ref = Cox_bottom_ref / (Cox_bottom_ref + Cox_gi_ref)
+            eff_coupling_cur = Cox_bottom_cur / (Cox_bottom_cur + Cox_gi_cur)
+            # 耦合效率降低时Vth增加，因此取负号
+            delta_vth += (eff_coupling_ref - eff_coupling_cur) * 2.0
+        
+        # 3. Buf介电常数变化影响
+        if eps_buf_sio_cur != eps_buf_sio_ref or eps_sin_cur != eps_sin_ref:
+            eff_coupling_ref = Cox_bottom_ref / (Cox_bottom_ref + Cox_gi_ref)
+            eff_coupling_cur = Cox_bottom_cur / (Cox_bottom_cur + Cox_gi_cur)
+            delta_vth += (eff_coupling_ref - eff_coupling_cur) * 1.5
+        
+        # 4. IGZO厚度变化引起的Vth偏移
+        # 更厚的IGZO = 更多可动载流子 = 更容易导通 = Vth负移
+        if t_igzo_cur != t_igzo_ref:
+            delta_vth_thickness = -0.02 * (t_igzo_cur - t_igzo_ref) / 1e-7
+            delta_vth += delta_vth_thickness
+        
+        # 5. 掺杂浓度引起的Vth偏移
+        if nd_cur != nd_ref and nd_ref > 0:
+            delta_vth_doping = Vt * np.log(nd_cur / nd_ref) * 0.5
+            delta_vth += delta_vth_doping
+        
+        # 6. 结构类型影响 (单栅vs双栅)
+        if structure_cur != structure_ref:
+            if 'Single' in structure_cur:
+                # 单栅时，控制效果减半，Vth约增加0.5-1V
+                delta_vth += 0.5
+        
+        # 7. 陷阱能级位置影响
+        # 更深的陷阱能级 = 更难释放载流子 = 更大的Vth
+        if e_trap_cur != e_trap_ref:
+            # 每0.1eV变化约0.1V Vth偏移
+            delta_vth += (e_trap_cur - e_trap_ref) * 1.0
+        
+        return delta_vth
+    
+    @staticmethod
+    def calculate_ss_factor(params_current, params_reference):
+        """
+        计算亚阈值摆幅变化因子
+        SS = ln(10) * kT/q * (1 + Cd/Cox)
+        界面陷阱会增加Cd，从而增加SS
+        """
+        q = 1.602e-19
+        eps0 = 8.854e-14
+        
+        dit_top_ref = params_reference['dit_top']
+        dit_bot_ref = params_reference['dit_bottom']
+        dit_top_cur = params_current['dit_top']
+        dit_bot_cur = params_current['dit_bottom']
+        
+        eps_gi = params_current.get('eps_gi', 3.9)
+        t_gi = params_current.get('t_gi', 140) * 1e-7
+        
+        Cox = eps0 * eps_gi / t_gi
+        
+        # 界面陷阱等效电容 (每cm^2)
+        Cit_ref = q * q * (dit_top_ref + dit_bot_ref) / (0.0259 * 1.602e-19)  # 简化的陷阱电容
+        Cit_cur = q * q * (dit_top_cur + dit_bot_cur) / (0.0259 * 1.602e-19)
+        
+        # SS比例因子
+        ss_ideal = 60e-3  # 理想SS = 60mV/dec @ 300K
+        ss_ref = ss_ideal * (1 + Cit_ref / Cox)
+        ss_cur = ss_ideal * (1 + Cit_cur / Cox)
+        
+        # 限制SS在合理范围内 (60-300 mV/dec)
+        ss_ref = np.clip(ss_ref, 60e-3, 300e-3)
+        ss_cur = np.clip(ss_cur, 60e-3, 300e-3)
+        
+        return ss_cur / ss_ref
+    
+    @staticmethod
+    def scale_idvg_curve(vg_ref, ids_ref, params_current, params_reference, v_d=5.1):
+        """
+        基于物理模型缩放IdVg曲线
+        
+        考虑因素:
+        1. 阈值电压偏移 (ΔVth) - 包括buf层、gi层、掺杂、陷阱等
+        2. 亚阈值摆幅变化 (SS scaling)
+        3. 电流幅度缩放 (W/L, 厚度, 迁移率, 源漏电阻)
+        4. Vd依赖关系 (线性区vs饱和区)
+        """
+        # 提取参考曲线参数
+        ref_params = TFTPoissonSolver.extract_reference_params(vg_ref, ids_ref)
+        
+        # 计算各种偏移和缩放因子
+        delta_vth = TFTPoissonSolver.calculate_vth_shift(params_current, params_reference)
+        ss_factor = TFTPoissonSolver.calculate_ss_factor(params_current, params_reference)
+        
+        # 几何尺寸缩放
+        W_cur, L_cur = params_current['W'], params_current['L']
+        W_ref, L_ref = params_reference['W'], params_reference['L']
         scale_WL = (W_cur / L_cur) / (W_ref / L_ref)
         
-        scale_nd = nd_cur / nd_ref
+        # 厚度缩放 (电流与沟道厚度成正比)
+        t_igzo_cur = params_current['t_igzo']
+        t_igzo_ref = params_reference['t_igzo']
+        scale_thickness = t_igzo_cur / t_igzo_ref if t_igzo_ref > 0 else 1.0
         
-        scale_dit = 1.0
-        if dit_top_ref > 0 or dit_bot_ref > 0:
-            dit_total_ref = dit_top_ref + dit_bot_ref
-            dit_total_cur = dit_top_cur + dit_bot_cur
-            scale_dit = np.exp(-(dit_total_cur - dit_total_ref) / 1e11)
+        # 迁移率缩放 (与界面陷阱密度相关)
+        dit_total_cur = params_current['dit_top'] + params_current['dit_bottom']
+        dit_total_ref = params_reference['dit_top'] + params_reference['dit_bottom']
+        scale_mobility = np.exp(-(dit_total_cur - dit_total_ref) / 5e11)
+        scale_mobility = np.clip(scale_mobility, 0.3, 3.0)
         
-        ids_scaled = ids_ref * scale_WL * scale_nd * scale_dit
+        # 源漏电阻影响
+        L_source_cur = params_current.get('L_source', 3.0)
+        Rs_sheet_cur = params_current.get('Rs_sheet', 3700.0)
+        L_drain_cur = params_current.get('L_drain', 3.0)
+        Rd_sheet_cur = params_current.get('Rd_sheet', 3700.0)
         
-        return vg_ref.copy(), ids_scaled
+        L_source_ref = params_reference.get('L_source', 3.0)
+        Rs_sheet_ref = params_reference.get('Rs_sheet', 3700.0)
+        L_drain_ref = params_reference.get('L_drain', 3.0)
+        Rd_sheet_ref = params_reference.get('Rd_sheet', 3700.0)
+        
+        # 计算源漏电阻 (Ω)
+        R_source_cur = Rs_sheet_cur * L_source_cur * 1e-4 / (W_cur * 1e-4) if W_cur > 0 else 0
+        R_drain_cur = Rd_sheet_cur * L_drain_cur * 1e-4 / (W_cur * 1e-4) if W_cur > 0 else 0
+        R_total_cur = R_source_cur + R_drain_cur
+        
+        R_source_ref = Rs_sheet_ref * L_source_ref * 1e-4 / (W_ref * 1e-4) if W_ref > 0 else 0
+        R_drain_ref = Rs_sheet_ref * L_drain_ref * 1e-4 / (W_ref * 1e-4) if W_ref > 0 else 0
+        R_total_ref = R_source_ref + R_drain_ref
+        
+        # 总电流缩放因子
+        scale_current = scale_WL * scale_thickness * scale_mobility
+        
+        # 创建新的Vg数组
+        vg_new = vg_ref.copy()
+        ids_new = np.zeros_like(ids_ref)
+        
+        # 提取参考Vth用于区域判断
+        vth_ref = ref_params['vth']
+        
+        # 提取参考Ion用于电阻影响计算
+        ion_ref = ref_params['ion']
+        
+        # 对每个点进行变换
+        for i in range(len(vg_ref)):
+            vg_i = vg_ref[i]
+            ids_i = ids_ref[i]
+            
+            # 计算相对于参考Vth的栅压
+            vg_relative = vg_i - vth_ref
+            
+            # 判断区域: 亚阈值区 vs 导通区
+            if vg_relative < 0:
+                # 亚阈值区: 应用SS缩放
+                vg_new_relative = vg_relative * ss_factor
+                ids_scale_sub = 10 ** (vg_relative * (1 - 1/ss_factor) / 0.06)
+            else:
+                # 导通区: 主要是Vth偏移
+                vg_new_relative = vg_relative
+                ids_scale_sub = 1.0
+            
+            # 计算新的Vg
+            vg_new[i] = (vth_ref + delta_vth) + vg_new_relative
+            
+            # 计算基础电流
+            ids_base = ids_i * scale_current * ids_scale_sub
+            
+            # 应用源漏电阻修正
+            # 更高的电阻 = 更低的有效电流
+            if R_total_cur > 0 and ids_base > 0:
+                # 计算当前电阻引起的压降
+                v_drop_cur = ids_base * R_total_cur
+                # 电阻越大，电流降低越多 (使用近似模型)
+                resistance_factor = 1.0 / (1.0 + v_drop_cur / v_d) if v_d > 0 else 1.0
+                ids_base = ids_base * resistance_factor
+            
+            ids_new[i] = ids_base
+        
+        return vg_new, ids_new
     
     @staticmethod
     def calculate_vth_simple(vg_array, ids_array, threshold=1e-9):

@@ -83,17 +83,8 @@ v_tg = st.sidebar.slider("顶栅 Vtg (V)", -10.0, 20.0, 10.0)
 v_bg = st.sidebar.slider("底栅 Vbg (V)", -10.0, 20.0, 10.0)
 v_ds = st.sidebar.slider("漏极 Vds (V)", 0.0, 20.0, 5.0)
 
-st.sidebar.header("5. IdVg扫描参数 (IdVg Sweep)")
-col_idvg1, col_idvg2 = st.sidebar.columns(2)
-with col_idvg1:
-    vd_lin = st.number_input("Vd线性区 (V)", value=0.1, min_value=0.0, max_value=10.0, step=0.1)
-    vd_sat = st.number_input("Vd饱和区 (V)", value=5.1, min_value=0.0, max_value=20.0, step=0.1)
-with col_idvg2:
-    vg_start = st.number_input("Vg起始 (V)", value=-10.0, step=1.0)
-    vg_stop = st.number_input("Vg终止 (V)", value=20.0, step=1.0)
-vg_step = st.sidebar.number_input("Vg步长 (V)", value=0.2, min_value=0.01, max_value=1.0, step=0.05)
-
 if st.sidebar.button("开始仿真 (RUN)", type="primary"):
+    vd_sat = 5.1
     with st.spinner(f"正在计算... (IGZO层物理网格点: {ny_igzo})"):
         solver = TFTPoissonSolver(
             length=L_um,
@@ -111,7 +102,7 @@ if st.sidebar.button("开始仿真 (RUN)", type="primary"):
         )
         
         start = time.time()
-        phi, n_conc, E, vd_eff, ids = solver.solve(v_top_gate_bias=v_tg, v_ds=v_ds, v_bot_gate_bias=v_bg)
+        phi, _, E, vd_eff, ids = solver.solve(v_top_gate_bias=v_tg, v_ds=v_ds, v_bot_gate_bias=v_bg)
         elapsed = time.time() - start
         
         st.success(f"计算完成，耗时 {elapsed:.3f}秒 | 有效Vd = {vd_eff:.4f}V | Ids = {ids:.2e}A")
@@ -119,43 +110,60 @@ if st.sidebar.button("开始仿真 (RUN)", type="primary"):
         vg_ref, ids_ref = solver.load_reference_idvg()
         
         if vg_ref is not None and ids_ref is not None:
+            # 参考参数 (双栅基准)
             params_ref = {
                 'W': 3.0, 'L': 4.0,
                 't_igzo': 25.0,
                 'nd': 1e17,
                 'dit_top': 3e10,
-                'dit_bottom': 5e10
+                'dit_bottom': 5e10,
+                'eps_gi': 3.9,
+                't_gi': 140,
+                'eps_buf_sio': 3.9,
+                't_buf_sio': 300,
+                'eps_sin': 7.0,
+                't_sin': 100,
+                'structure_type': 'Double Gate',
+                'e_trap': 0.3,
+                'L_source': 3.0,
+                'Rs_sheet': 3700.0,
+                'L_drain': 3.0,
+                'Rd_sheet': 3700.0
             }
             
+            # 当前参数 (用户输入)
             params_cur = {
                 'W': W_um, 'L': L_um,
                 't_igzo': t_igzo_nm,
                 'nd': nd_igzo,
                 'dit_top': dit_top,
-                'dit_bottom': dit_bottom
+                'dit_bottom': dit_bottom,
+                'eps_gi': eps_gi,
+                't_gi': t_gi_nm,
+                'eps_buf_sio': eps_buf_sio,
+                't_buf_sio': t_buf_sio_nm,
+                'eps_sin': eps_sin,
+                't_sin': t_sin_nm,
+                'structure_type': struct_type,
+                'e_trap': e_trap,
+                'L_source': L_source_um,
+                'Rs_sheet': Rs_sheet,
+                'L_drain': L_drain_um,
+                'Rd_sheet': Rd_sheet
             }
             
-            vg_lin, ids_lin = solver.scale_idvg_curve(vg_ref, ids_ref, params_cur, params_ref)
-            vg_sat, ids_sat = solver.scale_idvg_curve(vg_ref, ids_ref, params_cur, params_ref)
-            
-            ids_lin = ids_lin * (vd_lin / 5.1)
-            ids_sat = ids_sat * (vd_sat / 5.1)
+            vg_sat, ids_sat = solver.scale_idvg_curve(vg_ref, ids_ref, params_cur, params_ref, v_d=vd_sat)
             
             C_gi = solver.eps0 * eps_gi / (t_gi_nm * 1e-7)
             
-            vth_lin = solver.calculate_vth_simple(vg_lin, ids_lin, threshold=1e-9)
-            vth_sat = solver.calculate_vth_simple(vg_sat, ids_sat, threshold=1e-9)
-            ss_lin = solver.calculate_ss_simple(vg_lin, ids_lin)
-            ss_sat = solver.calculate_ss_simple(vg_sat, ids_sat)
-            mob_lin = solver.calculate_mobility_simple(vg_lin, ids_lin, vd_lin, W_um*1e-4, L_um*1e-4, C_gi)
-            mob_sat = solver.calculate_mobility_simple(vg_sat, ids_sat, vd_sat, W_um*1e-4, L_um*1e-4, C_gi)
-            ion_lin = solver.extract_ion_simple(vg_lin, ids_lin, vg_target=10.0)
-            ion_sat = solver.extract_ion_simple(vg_sat, ids_sat, vg_target=10.0)
+            vth_sat = solver.calculate_vth_simple(vg_sat, ids_sat, threshold=1e-9) if vg_sat is not None and ids_sat is not None else np.nan
+            ss_sat = solver.calculate_ss_simple(vg_sat, ids_sat) if vg_sat is not None and ids_sat is not None else np.nan
+            mob_sat = solver.calculate_mobility_simple(vg_sat, ids_sat, vd_sat, W_um*1e-4, L_um*1e-4, C_gi) if vg_sat is not None and ids_sat is not None else np.nan
+            ion_sat = solver.extract_ion_simple(vg_sat, ids_sat, vg_target=10.0) if vg_sat is not None and ids_sat is not None else np.nan
         else:
             st.warning("参考IdVg曲线未找到，跳过IdVg绘图")
-            vg_lin, ids_lin, vg_sat, ids_sat = None, None, None, None
-            vth_lin, vth_sat, ss_lin, ss_sat = np.nan, np.nan, np.nan, np.nan
-            mob_lin, mob_sat, ion_lin, ion_sat = np.nan, np.nan, np.nan, np.nan
+            vg_sat, ids_sat = None, None
+            vth_sat, ss_sat, mob_sat, ion_sat = np.nan, np.nan, np.nan, np.nan
         
         # --- 物理级重采样渲染 ---
         y_phys_cm = solver.y
@@ -244,21 +252,17 @@ if st.sidebar.button("开始仿真 (RUN)", type="primary"):
         with tab4:
             st.subheader("IdVg特性曲线 (Transfer Characteristics)")
             
-            if vg_lin is not None and ids_lin is not None:
-                col_param1, col_param2 = st.columns(2)
+            if vg_sat is not None and ids_sat is not None:
+                st.markdown("### 器件参数 (Vd={:.2f}V, Vg从-15V到+15V)".format(vd_sat))
+                col_param1, col_param2, col_param3, col_param4 = st.columns(4)
                 
                 with col_param1:
-                    st.markdown("### 线性区参数 (Vd={:.2f}V)".format(vd_lin))
-                    st.metric("阈值电压 Vth", f"{vth_lin:.3f} V" if not np.isnan(vth_lin) else "N/A")
-                    st.metric("亚阈值摆幅 SS", f"{ss_lin:.3f} V/dec" if not np.isnan(ss_lin) else "N/A")
-                    st.metric("场效应迁移率 μ", f"{mob_lin:.2f} cm²/V·s" if not np.isnan(mob_lin) else "N/A")
-                    st.metric("Ion @ Vg=10V", f"{ion_lin:.2e} A" if not np.isnan(ion_lin) else "N/A")
-                
-                with col_param2:
-                    st.markdown("### 饱和区参数 (Vd={:.2f}V)".format(vd_sat))
                     st.metric("阈值电压 Vth", f"{vth_sat:.3f} V" if not np.isnan(vth_sat) else "N/A")
+                with col_param2:
                     st.metric("亚阈值摆幅 SS", f"{ss_sat:.3f} V/dec" if not np.isnan(ss_sat) else "N/A")
+                with col_param3:
                     st.metric("场效应迁移率 μ", f"{mob_sat:.2f} cm²/V·s" if not np.isnan(mob_sat) else "N/A")
+                with col_param4:
                     st.metric("Ion @ Vg=10V", f"{ion_sat:.2e} A" if not np.isnan(ion_sat) else "N/A")
                 
                 fig_idvg = make_subplots(
@@ -268,31 +272,20 @@ if st.sidebar.button("开始仿真 (RUN)", type="primary"):
                 )
                 
                 fig_idvg.add_trace(
-                    go.Scatter(x=vg_lin, y=ids_lin, mode='lines+markers', 
-                              name=f'Vd={vd_lin}V (Lin)', line=dict(color='blue', width=2)),
-                    row=1, col=1
-                )
-                fig_idvg.add_trace(
                     go.Scatter(x=vg_sat, y=ids_sat, mode='lines+markers', 
-                              name=f'Vd={vd_sat}V (Sat)', line=dict(color='red', width=2)),
+                              name=f'Vd={vd_sat}V', line=dict(color='red', width=2)),
                     row=1, col=1
                 )
                 
-                ids_lin_safe = np.where(ids_lin > 0, ids_lin, 1e-15)
-                ids_sat_safe = np.where(ids_sat > 0, ids_sat, 1e-15)
+                ids_sat_safe = np.where(ids_sat > 0, ids_sat, 1e-15) if ids_sat is not None else None
                 
-                fig_idvg.add_trace(
-                    go.Scatter(x=vg_lin, y=ids_lin_safe, mode='lines+markers', 
-                              name=f'Vd={vd_lin}V (Lin)', line=dict(color='blue', width=2),
-                              showlegend=False),
-                    row=1, col=2
-                )
-                fig_idvg.add_trace(
-                    go.Scatter(x=vg_sat, y=ids_sat_safe, mode='lines+markers', 
-                              name=f'Vd={vd_sat}V (Sat)', line=dict(color='red', width=2),
-                              showlegend=False),
-                    row=1, col=2
-                )
+                if ids_sat_safe is not None:
+                    fig_idvg.add_trace(
+                        go.Scatter(x=vg_sat, y=ids_sat_safe, mode='lines+markers', 
+                                  name=f'Vd={vd_sat}V', line=dict(color='red', width=2),
+                                  showlegend=False),
+                        row=1, col=2
+                    )
                 
                 fig_idvg.update_xaxes(title_text="Vg (V)", row=1, col=1)
                 fig_idvg.update_xaxes(title_text="Vg (V)", row=1, col=2)

@@ -387,19 +387,40 @@ class TFTPoissonSolver:
         if nd_cur != nd_ref and nd_ref > 0:
             delta_vth_doping = Vt * np.log(nd_cur / nd_ref) * 0.5
             delta_vth += delta_vth_doping
-        
-        # 6. 结构类型影响 (单栅vs双栅)
+
+        # 6. W/L 对 Vth 的影响（短沟道效应）
+        # W/L 越小（短沟道），Vth 越低
+        W_cur = params_current.get('W', 3.0)
+        L_cur = params_current.get('L', 4.0)
+        W_ref = params_reference.get('W', 3.0)
+        L_ref = params_reference.get('L', 4.0)
+        WL_ratio_cur = W_cur / L_cur if L_cur > 0 else 0.75
+        WL_ratio_ref = W_ref / L_ref if L_ref > 0 else 0.75
+        if abs(WL_ratio_cur - WL_ratio_ref) > 0.01:
+            # W/L 减小 10% -> Vth 降低约 0.05V
+            delta_vth_WL = -0.5 * (WL_ratio_cur - WL_ratio_ref) / WL_ratio_ref
+            delta_vth += delta_vth_WL
+
+        # 7. 结构类型影响 (单栅vs双栅)
         if structure_cur != structure_ref:
             if 'Single' in structure_cur:
                 # 单栅时，控制效果减半，Vth约增加0.5-1V
                 delta_vth += 0.5
         
-        # 7. 陷阱能级位置影响
+        # 8. 陷阱能级位置影响
         # 更深的陷阱能级 = 更难释放载流子 = 更大的Vth
         if e_trap_cur != e_trap_ref:
-            # 每0.1eV变化约0.1V Vth偏移
             delta_vth += (e_trap_cur - e_trap_ref) * 1.0
-        
+
+        # 9. 底栅固定电压对顶栅扫描的影响 (衬底偏置效应/Body Effect)
+        v_bg_fixed = params_current.get('v_bg_fixed', None)
+        v_bg_floating = params_current.get('v_bg_floating', False)
+        if v_bg_fixed is not None and structure_cur == 'Single Gate (Top)' and not v_bg_floating:
+            coupling_efficiency = Cox_bottom_cur / (Cox_bottom_cur + Cox_gi_cur)
+            gamma = 0.3
+            delta_vth_body = -v_bg_fixed * coupling_efficiency * gamma
+            delta_vth += delta_vth_body
+
         return delta_vth
     
     @staticmethod
@@ -408,34 +429,109 @@ class TFTPoissonSolver:
         计算亚阈值摆幅变化因子
         SS = ln(10) * kT/q * (1 + Cd/Cox)
         界面陷阱会增加Cd，从而增加SS
+        衬底偏置效应也会影响SS：底栅负电压会增加耗尽层电容，从而增加SS
         """
         q = 1.602e-19
         eps0 = 8.854e-14
-        
+        Vt = 0.0259
+
         dit_top_ref = params_reference['dit_top']
         dit_bot_ref = params_reference['dit_bottom']
         dit_top_cur = params_current['dit_top']
         dit_bot_cur = params_current['dit_bottom']
-        
+
         eps_gi = params_current.get('eps_gi', 3.9)
         t_gi = params_current.get('t_gi', 140) * 1e-7
-        
+        t_igzo_cur = params_current['t_igzo'] * 1e-7
+
         Cox = eps0 * eps_gi / t_gi
-        
+
         # 界面陷阱等效电容 (每cm^2)
-        Cit_ref = q * q * (dit_top_ref + dit_bot_ref) / (0.0259 * 1.602e-19)  # 简化的陷阱电容
-        Cit_cur = q * q * (dit_top_cur + dit_bot_cur) / (0.0259 * 1.602e-19)
-        
+        Cit_ref = q * (dit_top_ref + dit_bot_ref)
+        Cit_cur = q * (dit_top_cur + dit_bot_cur)
+
+        structure_cur = params_current.get('structure_type', 'Double Gate')
+        v_bg_fixed = params_current.get('v_bg_fixed', None)
+        v_bg_floating = params_current.get('v_bg_floating', False)
+
+        # 计算底栅耦合效率（buf越薄，耦合越强）
+        eps_buf_sio_cur = params_current.get('eps_buf_sio', 3.9)
+        t_buf_sio_cur = params_current.get('t_buf_sio', 300) * 1e-7
+        eps_sin_cur = params_current.get('eps_sin', 7.0)
+        t_sin_cur = params_current.get('t_sin', 100) * 1e-7
+
+        Cox_buf_cur = eps0 * eps_buf_sio_cur / t_buf_sio_cur if t_buf_sio_cur > 0 else 1e-7
+        Cox_sin_cur = eps0 * eps_sin_cur / t_sin_cur if t_sin_cur > 0 else 1e-7
+        Cox_bottom_cur = 1.0 / (1.0 / Cox_sin_cur + 1.0 / Cox_buf_cur) if Cox_sin_cur > 0 and Cox_buf_cur > 0 else 1e-7
+
+        # 参考耦合效率（buf厚度300nm）
+        Cox_buf_ref = eps0 * 3.9 / (300 * 1e-7)
+        Cox_sin_ref = eps0 * 7.0 / (100 * 1e-7)
+        Cox_bottom_ref = 1.0 / (1.0 / Cox_sin_ref + 1.0 / Cox_buf_ref)
+
+        # 耦合效率比值（当前/参考）
+        coupling_ratio = Cox_bottom_cur / Cox_bottom_ref if Cox_bottom_ref > 0 else 1.0
+
+        W_cur = params_current['W']
+        L_cur = params_current['L']
+        WL_ratio = W_cur / L_cur if L_cur > 0 else 0.5
+        WL_ref = 0.5
+
+        # IGZO厚度对SS的影响（IGZO越厚，栅控越弱，SS越大）
+        t_igzo_cur = params_current.get('t_igzo', 25.0)
+        t_igzo_ref = params_reference.get('t_igzo', 25.0)
+        if t_igzo_cur != t_igzo_ref:
+            # 每增加10nm，SS增加约3%
+            igzo_factor = 1.0 + 0.03 * (t_igzo_cur - t_igzo_ref) / 10.0
+            ss_body_factor *= igzo_factor
+
+        if structure_cur == 'Single Gate (Top)':
+            ss_body_factor = 1.59
+
+            if not v_bg_floating and v_bg_fixed is not None:
+                base_effect = 0.10 * (-v_bg_fixed) / 10.0
+                ss_body_factor += base_effect * coupling_ratio
+
+            if abs(WL_ratio - WL_ref) > 0.001:
+                WL_factor = 1.0 - 0.20 * np.log(WL_ratio / WL_ref)
+                ss_body_factor *= WL_factor
+
+            # 单栅模式下IGZO厚度影响更明显
+            if t_igzo_cur != t_igzo_ref:
+                igzo_factor = 1.0 + 0.05 * (t_igzo_cur - t_igzo_ref) / 10.0
+                ss_body_factor *= igzo_factor
+        else:
+            ss_body_factor = 1.0
+
+            if abs(WL_ratio - WL_ref) > 0.001:
+                WL_factor = 1.0 - 0.15 * np.log(WL_ratio / WL_ref)
+                ss_body_factor *= WL_factor
+
         # SS比例因子
         ss_ideal = 60e-3  # 理想SS = 60mV/dec @ 300K
         ss_ref = ss_ideal * (1 + Cit_ref / Cox)
-        ss_cur = ss_ideal * (1 + Cit_cur / Cox)
-        
+        ss_cur = ss_ideal * (1 + Cit_cur / Cox) * ss_body_factor
+
         # 限制SS在合理范围内 (60-300 mV/dec)
         ss_ref = np.clip(ss_ref, 60e-3, 300e-3)
         ss_cur = np.clip(ss_cur, 60e-3, 300e-3)
-        
-        return ss_cur / ss_ref
+
+        ss_factor = ss_cur / ss_ref
+
+        # 存储调试信息到params
+        if not hasattr(params_current, '_debug_ss'):
+            params_current['_debug_ss'] = {
+                'structure_cur': structure_cur,
+                'ss_body_factor': ss_body_factor,
+                'Cit_ref': Cit_ref,
+                'Cit_cur': Cit_cur,
+                'Cox': Cox,
+                'ss_ref': ss_ref,
+                'ss_cur': ss_cur,
+                'ss_factor': ss_factor
+            }
+
+        return ss_factor
     
     @staticmethod
     def scale_idvg_curve(vg_ref, ids_ref, params_current, params_reference, v_d=5.1):
@@ -468,9 +564,23 @@ class TFTPoissonSolver:
         # 迁移率缩放 (与界面陷阱密度相关)
         dit_total_cur = params_current['dit_top'] + params_current['dit_bottom']
         dit_total_ref = params_reference['dit_top'] + params_reference['dit_bottom']
-        scale_mobility = np.exp(-(dit_total_cur - dit_total_ref) / 5e11)
+        scale_mobility_dit = np.exp(-(dit_total_cur - dit_total_ref) / 5e11)
+        scale_mobility_dit = np.clip(scale_mobility_dit, 0.3, 3.0)
+
+        structure_cur = params_current.get('structure_type', 'Double Gate')
+        v_bg_fixed = params_current.get('v_bg_fixed', None)
+        v_bg_floating = params_current.get('v_bg_floating', False)
+        scale_mobility_body = 1.0
+
+        if structure_cur == 'Single Gate (Top)':
+            scale_mobility_body = 0.75
+
+            if not v_bg_floating and v_bg_fixed is not None:
+                scale_mobility_body -= 0.20 * (-v_bg_fixed) / 10.0
+
+        scale_mobility = scale_mobility_dit * scale_mobility_body
         scale_mobility = np.clip(scale_mobility, 0.3, 3.0)
-        
+
         # 源漏电阻影响
         L_source_cur = params_current.get('L_source', 3.0)
         Rs_sheet_cur = params_current.get('Rs_sheet', 3700.0)
@@ -508,23 +618,25 @@ class TFTPoissonSolver:
         for i in range(len(vg_ref)):
             vg_i = vg_ref[i]
             ids_i = ids_ref[i]
-            
+
             # 计算相对于参考Vth的栅压
             vg_relative = vg_i - vth_ref
-            
+
             # 判断区域: 亚阈值区 vs 导通区
             if vg_relative < 0:
-                # 亚阈值区: 应用SS缩放
+                # 亚阈值区: SS影响Vg轴的缩放，但不影响电流值
+                # 更大的SS意味着需要更大的Vg变化才能达到相同的电流
                 vg_new_relative = vg_relative * ss_factor
-                ids_scale_sub = 10 ** (vg_relative * (1 - 1/ss_factor) / 0.06)
+                # 保持电流不变，只通过Vg轴调整来体现SS差异
+                ids_scale_sub = 1.0
             else:
                 # 导通区: 主要是Vth偏移
                 vg_new_relative = vg_relative
                 ids_scale_sub = 1.0
-            
+
             # 计算新的Vg
             vg_new[i] = (vth_ref + delta_vth) + vg_new_relative
-            
+
             # 计算基础电流
             ids_base = ids_i * scale_current * ids_scale_sub
             
@@ -596,7 +708,50 @@ class TFTPoissonSolver:
         ss = vg_at_1e9 - vg_at_1e10
         
         return ss if ss > 0 else np.nan
-    
+
+    @staticmethod
+    def calculate_mob_factor(params_current, params_reference):
+        """Calculate mobility scaling factor based on device parameters."""
+        eps0 = 8.854e-14
+        dit_total_cur = params_current['dit_top'] + params_current['dit_bottom']
+        dit_total_ref = params_reference['dit_top'] + params_reference['dit_bottom']
+        scale_mobility_dit = np.exp(-(dit_total_cur - dit_total_ref) / 5e11)
+        scale_mobility_dit = np.clip(scale_mobility_dit, 0.3, 3.0)
+
+        # 计算底栅耦合效率
+        eps_buf_sio_cur = params_current.get('eps_buf_sio', 3.9)
+        t_buf_sio_cur = params_current.get('t_buf_sio', 300) * 1e-7
+        eps_sin_cur = params_current.get('eps_sin', 7.0)
+        t_sin_cur = params_current.get('t_sin', 100) * 1e-7
+
+        Cox_buf_cur = eps0 * eps_buf_sio_cur / t_buf_sio_cur if t_buf_sio_cur > 0 else 1e-7
+        Cox_sin_cur = eps0 * eps_sin_cur / t_sin_cur if t_sin_cur > 0 else 1e-7
+        Cox_bottom_cur = 1.0 / (1.0 / Cox_sin_cur + 1.0 / Cox_buf_cur) if Cox_sin_cur > 0 and Cox_buf_cur > 0 else 1e-7
+
+        Cox_buf_ref = eps0 * 3.9 / (300 * 1e-7)
+        Cox_sin_ref = eps0 * 7.0 / (100 * 1e-7)
+        Cox_bottom_ref = 1.0 / (1.0 / Cox_sin_ref + 1.0 / Cox_buf_ref)
+
+        coupling_ratio = Cox_bottom_cur / Cox_bottom_ref if Cox_bottom_ref > 0 else 1.0
+
+        structure_cur = params_current.get('structure_type', 'Double Gate')
+        v_bg_fixed = params_current.get('v_bg_fixed', None)
+        v_bg_floating = params_current.get('v_bg_floating', False)
+        scale_mobility_body = 1.0
+
+        if structure_cur == 'Single Gate (Top)':
+            # 单栅基础迁移率比双栅低25%
+            scale_mobility_body = 0.75
+
+            # 根据底栅电压进一步调整
+            if not v_bg_floating and v_bg_fixed is not None:
+                # vbg效应强度与耦合效率成正比（buf越薄，效应越强）
+                base_effect = 0.20 * (-v_bg_fixed) / 10.0
+                scale_mobility_body -= base_effect * coupling_ratio
+
+        scale_mobility = scale_mobility_dit * scale_mobility_body
+        return np.clip(scale_mobility, 0.3, 3.0)
+
     @staticmethod
     def calculate_mobility_simple(vg_array, ids_array, v_ds, W, L, C_gi):
         mask = ~np.isnan(ids_array) & (ids_array > 0)

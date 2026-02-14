@@ -259,14 +259,20 @@ class TFTPoissonSolver:
         self.E_field = np.sqrt(self.Ex**2 + self.Ey**2)
     
     @staticmethod
-    def load_reference_idvg(csv_path='/Users/rinn_kennroku/Desktop/tft_sim/双栅基准idvg.csv'):
+    def load_reference_idvg(csv_path=None):
         """加载参考IdVg曲线数据"""
         try:
+            if csv_path is None:
+                # 使用相对路径，适用于云端部署
+                import os
+                current_dir = os.path.dirname(os.path.abspath(__file__))
+                csv_path = os.path.join(current_dir, '双栅基准idvg.csv')
             data = np.genfromtxt(csv_path, delimiter=',', skip_header=2)
             vg_ref = data[:, 0]
             ids_ref = data[:, 1]
             return vg_ref, ids_ref
-        except:
+        except Exception as e:
+            print(f"Error loading reference IdVg data: {e}")
             return None, None
     
     @staticmethod
@@ -480,10 +486,6 @@ class TFTPoissonSolver:
         # IGZO厚度对SS的影响（IGZO越厚，栅控越弱，SS越大）
         t_igzo_cur = params_current.get('t_igzo', 25.0)
         t_igzo_ref = params_reference.get('t_igzo', 25.0)
-        if t_igzo_cur != t_igzo_ref:
-            # 每增加10nm，SS增加约3%
-            igzo_factor = 1.0 + 0.03 * (t_igzo_cur - t_igzo_ref) / 10.0
-            ss_body_factor *= igzo_factor
 
         if structure_cur == 'Single Gate (Top)':
             ss_body_factor = 1.59
@@ -502,6 +504,11 @@ class TFTPoissonSolver:
                 ss_body_factor *= igzo_factor
         else:
             ss_body_factor = 1.0
+
+            # 双栅模式下IGZO厚度影响
+            if t_igzo_cur != t_igzo_ref:
+                igzo_factor = 1.0 + 0.03 * (t_igzo_cur - t_igzo_ref) / 10.0
+                ss_body_factor *= igzo_factor
 
             if abs(WL_ratio - WL_ref) > 0.001:
                 WL_factor = 1.0 - 0.15 * np.log(WL_ratio / WL_ref)
